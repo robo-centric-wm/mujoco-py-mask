@@ -1,26 +1,26 @@
 import distutils
-import glob
 import os
 import shutil
-import subprocess
 import sys
 from distutils.core import Extension
 from distutils.dist import Distribution
 from distutils.sysconfig import customize_compiler
-from importlib.machinery import ExtensionFileLoader
 from os.path import abspath, dirname, exists, join, getmtime
 from random import choice
 from shutil import move
 from string import ascii_lowercase
+from importlib.machinery import ExtensionFileLoader
+import glob
 
-import fasteners
 import numpy as np
+from cffi import FFI
 from Cython.Build import cythonize
 from Cython.Distutils.old_build_ext import old_build_ext as build_ext
-from cffi import FFI
-
-from mujoco_py.utils import discover_mujoco
 from mujoco_py.version import get_version
+from lockfile import LockFile
+import subprocess
+
+from mujoco_py.utils import discover_mujoco, MISSING_KEY_MESSAGE
 
 
 def get_nvidia_lib_dir():
@@ -31,11 +31,6 @@ def get_nvidia_lib_dir():
     docker_path = '/usr/local/nvidia/lib64'
     if exists(docker_path):
         return docker_path
-
-    nvidia_path = '/usr/lib/nvidia'
-    if exists(nvidia_path):
-        return nvidia_path
-
     paths = glob.glob('/usr/lib/nvidia-[0-9][0-9][0-9]')
     paths = sorted(paths)
     if len(paths) == 0:
@@ -91,7 +86,7 @@ The easy solution is to `import mujoco_py` _before_ `import glfw`.
 
     lockpath = os.path.join(os.path.dirname(cext_so_path), 'mujocopy-buildlock')
 
-    with fasteners.InterProcessLock(lockpath):
+    with LockFile(lockpath):
         mod = None
         force_rebuild = os.environ.get('MUJOCO_PY_FORCE_REBUILD')
         if force_rebuild:
@@ -109,7 +104,6 @@ The easy solution is to `import mujoco_py` _before_ `import glfw`.
         if mod is None:
             cext_so_path = builder.build()
             mod = load_dynamic_ext('cymj', cext_so_path)
-
     return mod
 
 
@@ -125,7 +119,7 @@ def _ensure_set_env_var(var_name, lib_path):
 
 
 def load_dynamic_ext(name, path):
-    """ Load compiled shared object and return as python module. """
+    ''' Load compiled shared object and return as python module. '''
     loader = ExtensionFileLoader(name, path)
     return loader.load_module()
 
@@ -150,7 +144,7 @@ class custom_build_ext(build_ext):
 
 
 def fix_shared_library(so_file, name, library_path):
-    """ Used to fixup shared libraries on Linux """
+    ''' Used to fixup shared libraries on Linux '''
     subprocess.check_call(['patchelf', '--remove-rpath', so_file])
     ldd_output = subprocess.check_output(['ldd', so_file]).decode('utf-8')
 
@@ -160,7 +154,7 @@ def fix_shared_library(so_file, name, library_path):
 
 
 def manually_link_libraries(mujoco_path, raw_cext_dll_path):
-    """ Used to fix mujoco library linking on Mac """
+    ''' Used to fix mujoco library linking on Mac '''
     root, ext = os.path.splitext(raw_cext_dll_path)
     final_cext_dll_path = root + '_final' + ext
 
@@ -177,8 +171,8 @@ def manually_link_libraries(mujoco_path, raw_cext_dll_path):
 
     # Fix the rpath of the generated library -- i lost the Stackoverflow
     # reference here
-    from_mujoco_path = '@executable_path/libmujoco210.dylib'
-    to_mujoco_path = '%s/libmujoco210.dylib' % mj_bin_path
+    from_mujoco_path = '@executable_path/libmujoco200.dylib'
+    to_mujoco_path = '%s/libmujoco200.dylib' % mj_bin_path
     subprocess.check_call(['install_name_tool',
                            '-change',
                            from_mujoco_path,
@@ -213,7 +207,7 @@ class MujocoExtensionBuilder():
                 join(mujoco_path, 'include'),
                 np.get_include(),
             ],
-            libraries=['mujoco210'],
+            libraries=['mujoco200'],
             library_dirs=[join(mujoco_path, 'bin')],
             extra_compile_args=[
                 '-fopenmp',  # needed for OpenMP
@@ -277,7 +271,7 @@ class LinuxCPUExtensionBuilder(MujocoExtensionBuilder):
     def _build_impl(self):
         so_file_path = super()._build_impl()
         # Removes absolute paths to libraries. Allows for dynamic loading.
-        fix_shared_library(so_file_path, 'libmujoco210.so', 'libmujoco210.so')
+        fix_shared_library(so_file_path, 'libmujoco200.so', 'libmujoco200.so')
         fix_shared_library(so_file_path, 'libglewosmesa.so', 'libglewosmesa.so')
         return so_file_path
 
@@ -296,7 +290,7 @@ class LinuxGPUExtensionBuilder(MujocoExtensionBuilder):
         so_file_path = super()._build_impl()
         fix_shared_library(so_file_path, 'libOpenGL.so', 'libOpenGL.so.0')
         fix_shared_library(so_file_path, 'libEGL.so', 'libEGL.so.1')
-        fix_shared_library(so_file_path, 'libmujoco210.so', 'libmujoco210.so')
+        fix_shared_library(so_file_path, 'libmujoco200.so', 'libmujoco200.so')
         fix_shared_library(so_file_path, 'libglewegl.so', 'libglewegl.so')
         return so_file_path
 
@@ -313,17 +307,13 @@ class MacExtensionBuilder(MujocoExtensionBuilder):
 
     def _build_impl(self):
         if not os.environ.get('CC'):
-            # Known-working versions of GCC on mac (prefer latest one)
-            c_compilers = [
-                '/usr/local/bin/gcc-9',
-                '/usr/local/bin/gcc-8',
-                '/usr/local/bin/gcc-7',
-                '/usr/local/bin/gcc-6',
-                '/opt/local/bin/gcc-mp-9',
-                '/opt/local/bin/gcc-mp-8',
-                '/opt/local/bin/gcc-mp-7',
-                '/opt/local/bin/gcc-mp-6',
-            ]
+            # Known-working versions of GCC on mac
+            c_compilers = ['/usr/local/bin/gcc-6',
+                           '/usr/local/bin/gcc-7',
+                           '/usr/local/bin/gcc-8',
+                           '/opt/local/bin/gcc-mp-6',
+                           '/opt/local/bin/gcc-mp-7',
+                           '/opt/local/bin/gcc-mp-8']
             available_c_compiler = None
             for c_compiler in c_compilers:
                 if distutils.spawn.find_executable(c_compiler) is not None:
@@ -331,10 +321,10 @@ class MacExtensionBuilder(MujocoExtensionBuilder):
                     break
             if available_c_compiler is None:
                 raise RuntimeError(
-                    'Could not find supported GCC executable.\n\n'
-                    'HINT: On OS X, install GCC 9.x with '
-                    '`brew install gcc@9`. or '
-                    '`port install gcc9`.')
+                    'Could not find GCC executable.\n\n'
+                    'HINT: On OS X, install GCC with '
+                    '`brew install gcc`. or '
+                    '`port install gcc`.')
             os.environ['CC'] = available_c_compiler
 
             so_file_path = super()._build_impl()
@@ -483,7 +473,7 @@ def build_callback_fn(function_string, userdata_names=[]):
     ffibuilder.set_source(name, source_string,
                           include_dirs=[join(mujoco_path, 'include')],
                           library_dirs=[join(mujoco_path, 'bin')],
-                          libraries=['mujoco210'])
+                          libraries=['mujoco200'])
     # Catch compilation exceptions so we can cleanup partial files in that case
     try:
         library_path = ffibuilder.compile(verbose=True)
@@ -500,7 +490,20 @@ def build_callback_fn(function_string, userdata_names=[]):
     return module.lib.__fun
 
 
-mujoco_path = discover_mujoco()
+
+
+def find_key():
+    ''' Try to find the key file, if missing, print out a big message '''
+    if exists(key_path):
+        return
+    print(MISSING_KEY_MESSAGE.format(key_path), file=sys.stderr)
+
+
+def activate():
+    functions.mj_activate(key_path)
+
+
+mujoco_path, key_path = discover_mujoco()
 cymj = load_cython_ext(mujoco_path)
 
 

@@ -1,6 +1,7 @@
 SHELL := /bin/bash
 .PHONY: all clean build test mount_shell shell upload check-env
 
+MUJOCO_LICENSE_PATH ?= ~/.mujoco/mjkey.txt
 VERSION := `cd mujoco_py; python -c "from version import get_version;print(get_version())"; cd ..`
 PYTHON_VERSION := "36"
 DOCKER_NAME := quay.io/openai/mujoco_py:$(USER)_$(VERSION)
@@ -23,8 +24,9 @@ clean:
 	rm -rf dist
 	rm -rf build
 
-build:
-	docker build -t $(DOCKER_NAME) .
+build: check-license
+	cp $(MUJOCO_LICENSE_PATH) mjkey.txt
+	docker build -t $(DOCKER_NAME) . || rm mjkey.txt && rm mjkey.txt
 
 push:
 	docker push $(DOCKER_NAME)
@@ -80,3 +82,8 @@ generate_cpu_so:
 	docker run -it --name $(UUID) $(DOCKER_NAME) bash -c "make clean;python -c 'import mujoco_py'"
 	docker cp $(UUID):/mujoco_py/mujoco_py/generated/cymj_$(VERSION)_$(PYTHON_VERSION)_linuxcpuextensionbuilder.so mujoco_py/generated/
 
+
+check-license:
+ifeq ("","$(wildcard $(MUJOCO_LICENSE_PATH))")
+    $(error "License key not found at location $(MUJOCO_LICENSE_PATH). Use MUJOCO_LICENSE_PATH to specify its path")
+endif

@@ -1,7 +1,6 @@
 from threading import Lock
 from mujoco_py.generated import const
-import numpy as np
-cimport numpy as np
+
 
 cdef class MjRenderContext(object):
     """
@@ -164,7 +163,7 @@ cdef class MjRenderContext(object):
 
         for marker_params in self._markers:
             self._add_marker_to_scene(marker_params)
-        
+
         mjr_render(rect, &self._scn, &self._con)
         for gridpos, (text1, text2) in self._overlay.items():
             mjr_overlay(const.FONTSCALE_150, gridpos, rect, text1.encode(), text2.encode(), &self._con)
@@ -182,15 +181,15 @@ cdef class MjRenderContext(object):
 
         rgb_arr = np.zeros(3 * rect.width * rect.height, dtype=np.uint8)
         depth_arr = np.zeros(rect.width * rect.height, dtype=np.float32)
-        
         cdef unsigned char[::view.contiguous] rgb_view = rgb_arr
         cdef float[::view.contiguous] depth_view = depth_arr
         mjr_readPixels(&rgb_view[0], &depth_view[0], rect, &self._con)
         rgb_img = rgb_arr.reshape(rect.height, rect.width, 3)
+
         cdef np.ndarray[np.npy_uint32, ndim=2] seg_img
         cdef np.ndarray[np.npy_int32, ndim=2] seg_ids
-
         ret_img = rgb_img
+
         if segmentation:
             seg_img = (rgb_img[:, :, 0] + rgb_img[:, :, 1] * (2**8) + rgb_img[:, :, 2] * (2 ** 16))
             seg_img[seg_img >= (self._scn.ngeom + 1)] = 0
